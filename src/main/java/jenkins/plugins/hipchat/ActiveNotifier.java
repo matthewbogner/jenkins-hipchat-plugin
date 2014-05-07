@@ -57,6 +57,7 @@ public class ActiveNotifier implements FineGrainedNotifier {
     }
 
     public void completed(AbstractBuild r) {
+        logger.info("HipChat notifier processing build...");
         AbstractProject<?, ?> project = r.getProject();
         HipChatNotifier.HipChatJobProperty jobProperty = project.getProperty(HipChatNotifier.HipChatJobProperty.class);
         Result result = r.getResult();
@@ -68,7 +69,12 @@ public class ActiveNotifier implements FineGrainedNotifier {
                 || (result == Result.SUCCESS && previousResult == Result.FAILURE && jobProperty.getNotifyBackToNormal())
                 || (result == Result.SUCCESS && jobProperty.getNotifySuccess())
                 || (result == Result.UNSTABLE && jobProperty.getNotifyUnstable())) {
-            getHipChat(r).publish(getBuildStatusMessage(r), getBuildColor(r));
+
+            String msg = getBuildStatusMessage(r);
+            String color = getBuildColor(r);
+
+            logger.info("Publishing to hipchat... color: " + color + ", msg: " + msg);
+            getHipChat(r).publish(msg, color, "html");
         }
     }
 
@@ -107,7 +113,7 @@ public class ActiveNotifier implements FineGrainedNotifier {
         Result result = r.getResult();
         if (result == Result.SUCCESS) {
             return "green";
-        } else if (result == Result.FAILURE) {
+        } else if (result == Result.FAILURE || result == Result.UNSTABLE) {
             return "red";
         } else {
             return "yellow";
@@ -116,9 +122,14 @@ public class ActiveNotifier implements FineGrainedNotifier {
 
     String getBuildStatusMessage(AbstractBuild r) {
         MessageBuilder message = new MessageBuilder(notifier, r);
-        message.appendStatusMessage();
-        message.appendDuration();
-        return message.appendOpenLink().toString();
+
+        return message.appendAtAllMention()
+                      .appendStatusMessage()
+                      .appendDuration()
+                      .appendOpenLink()
+                      .appendCulprits()
+                      //.appendChanges()
+                      .toString();
     }
 
     public static class MessageBuilder {
@@ -130,7 +141,19 @@ public class ActiveNotifier implements FineGrainedNotifier {
             this.notifier = notifier;
             this.message = new StringBuffer();
             this.build = build;
+            appendGraphic();
             startMessage();
+        }
+
+        public MessageBuilder appendAtAllMention() {
+            Result result = build.getResult();
+            AbstractProject<?, ?> project = build.getProject();
+            HipChatNotifier.HipChatJobProperty jobProperty = project.getProperty(HipChatNotifier.HipChatJobProperty.class);
+            if ((result == Result.FAILURE || result == Result.UNSTABLE) && jobProperty.getMentionAll()) {
+                message.append("@all ");
+            }
+
+            return this;
         }
 
         public MessageBuilder appendStatusMessage() {
@@ -146,11 +169,11 @@ public class ActiveNotifier implements FineGrainedNotifier {
             Run previousBuild = r.getProject().getLastBuild().getPreviousBuild();
             Result previousResult = (previousBuild != null) ? previousBuild.getResult() : Result.SUCCESS;
             if (result == Result.SUCCESS && previousResult == Result.FAILURE) return "Back to normal";
-            if (result == Result.SUCCESS) return "Success";
-            if (result == Result.FAILURE) return "<b>FAILURE</b>";
-            if (result == Result.ABORTED) return "ABORTED";
+            if (result == Result.SUCCESS) return "successful";
+            if (result == Result.FAILURE) return "failed";
+            if (result == Result.ABORTED) return "aborted";
             if (result == Result.NOT_BUILT) return "Not built";
-            if (result == Result.UNSTABLE) return "Unstable";
+            if (result == Result.UNSTABLE) return "unstable";
             return "Unknown";
         }
 
@@ -178,9 +201,84 @@ public class ActiveNotifier implements FineGrainedNotifier {
             return this;
         }
 
+        public MessageBuilder appendGraphic() {
+            String baseUrl = notifier.getBuildServerUrl();
+            String successImg = baseUrl + "static/0ccb0342/images/24x24/blue.png";
+            String failImg = baseUrl + "static/0ccb0342/images/24x24/red.png";
+            String img = successImg;
+
+            Result result = build.getResult();
+            if (result == Result.UNSTABLE
+                    || result == Result.FAILURE
+                    || result == Result.ABORTED) {
+                img = failImg;
+            }
+            message.append("<img src='").append(img).append("' alt='Failed'/> ");
+            return this;
+        }
+
         public MessageBuilder appendDuration() {
             message.append(" after ");
             message.append(build.getDurationString());
+            return this;
+        }
+
+        public MessageBuilder appendCulprits() {
+            logger.info("Appending culprits...");
+            Result result = build.getResult();
+            if (result != Result.UNSTABLE
+                    && result != Result.FAILURE) {
+                // No need to append culprits
+                return this;
+            }
+
+            Set<User> culprits = build.getCulprits();
+            StringBuilder culpritBuilder = new StringBuilder();
+            if (culprits != null && culprits.size() > 0) {
+                for (User culprit : culprits) {
+                    culpritBuilder.append("<li>").append(culprit.getDisplayName()).append("</li>");
+                }
+
+                message.append("<br /><span style='margin-left:20px'><b>Culprits:</b></span><ol>").append(culpritBuilder.toString()).append("</ol>");
+            }
+            return this;
+        }
+
+        public MessageBuilder appendChanges() {
+            Result result = build.getResult();
+            if (result != Result.UNSTABLE
+                    && result != Result.FAILURE) {
+                // No need to append changes
+                return this;
+            }
+
+            if (!build.hasChangeSetComputed()) {
+                logger.info("No change set computed...");
+                return this;
+            }
+            ChangeLogSet changeSet = build.getChangeSet();
+            Set<AffectedFile> files = new HashSet<AffectedFile>();
+            for (Object o : changeSet.getItems()) {
+                Entry entry = (Entry) o;
+                files.addAll(entry.getAffectedFiles());
+            }
+            if (files.isEmpty()) {
+                logger.info("Empty changes...");
+                return this;
+            }
+
+            int fileCtr = 0;
+            int maxFiles = 10;
+            StringBuilder filesBuilder = new StringBuilder();
+            for (AffectedFile file : files) {
+                filesBuilder.append("<li>").append(file.getPath()).append("</li>");
+                if (++fileCtr >= maxFiles) {
+                    filesBuilder.append("<li>... and ").append(files.size() - maxFiles).append(" more files</li>");
+                    break;
+                }
+            }
+
+            message.append("<br /><span style='margin-left:20px'><b>Changes:</b></span><ol>").append(filesBuilder.toString()).append("</ol>");
             return this;
         }
 

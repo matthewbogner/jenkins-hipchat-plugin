@@ -19,9 +19,9 @@
 
     <!-- keeping original groupId -->
     <groupId>org.jvnet.hudson.plugins</groupId>
-	<artifactId>hipchat</artifactId>
+	<artifactId>hipchat-mbogner</artifactId>
 	<packaging>hpi</packaging>
-	<version>0.1.5-SNAPSHOT</version>
+	<version>0.1.12</version>
 	<name>Jenkins HipChat Plugin</name>
 	<description>A Build status publisher that notifies channels on a HipChat server</description>
     <url>http://wiki.jenkins-ci.org/display/JENKINS/HipChat+Plugin</url>
@@ -91,6 +91,17 @@
                 </plugin>
             </plugins>
         </pluginManagement>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.1</version>
+                <configuration>
+                    <source>1.6</source>
+                    <target>1.6</target>
+                </configuration>
+            </plugin>
+        </plugins>
     </build>
 
     <repositories>
